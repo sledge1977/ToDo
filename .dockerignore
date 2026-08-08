@@ -1,0 +1,9 @@
+bin/
+obj/
+.git/
+.env
+.env.*
+*.token
+graph-token*
+microsoft-todo-export.json
+scripts/microsoft-todo-export.json

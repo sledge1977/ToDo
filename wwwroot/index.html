@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#6c5ce7" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="app.css?v=16" />
+    <title>ToDo</title>
+  </head>
+  <body>
+    <section id="auth-view" class="auth-view">
+      <div class="auth-card">
+        <div class="brand"><span>✓</span> ToDo</div>
+        <p data-i18n="auth.tagline">
+          Your tasks. Together, without distractions.
+        </p>
+        <form id="auth-form">
+          <label
+            ><span data-i18n="common.email">Email</span
+            ><input id="auth-email" type="email" autocomplete="email" required
+          /></label>
+          <label
+            ><span data-i18n="common.password">Password</span
+            ><input
+              id="auth-password"
+              type="password"
+              autocomplete="current-password"
+              minlength="8"
+              required
+          /></label>
+          <p id="auth-error" class="error"></p>
+          <button id="auth-submit" class="primary" data-i18n="auth.login">
+            Sign in
+          </button>
+        </form>
+        <button
+          id="auth-switch"
+          class="text-button"
+          data-i18n="auth.registerPrompt"
+        >
+          No account yet? Register
+        </button>
+      </div>
+    </section>
+
+    <div id="app-view" hidden>
+      <aside>
+        <div class="brand"><span>✓</span> ToDo</div>
+        <button id="user-menu" class="user-info" data-i18n-title="user.menu">
+          <span class="user-avatar">●</span><span id="current-user">–</span
+          ><span class="user-chevron">⌄</span>
+        </button>
+        <button
+          id="mobile-list-picker"
+          class="mobile-list-picker"
+          data-i18n-title="list.allLists"
+          data-i18n-aria="list.allLists"
+        >
+          <span id="mobile-list-current">Lists</span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <button class="new-list" data-i18n="list.new">＋ New list</button>
+        <nav id="lists"></nav>
+      </aside>
+
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow" data-i18n="list.yourList">YOUR LIST</p>
+            <h1 id="list-title" data-i18n="common.loading">Loading …</h1>
+          </div>
+          <div class="header-actions">
+            <label class="search"
+              >⌕
+              <input
+                id="search"
+                data-i18n-placeholder="search.placeholder"
+                data-i18n-aria="search.label"
+                placeholder="Search"
+                aria-label="Search tasks"
+            /></label>
+            <button
+              id="list-menu"
+              data-i18n-title="list.options"
+              data-i18n-aria="list.options"
+            >
+              ⋯
+            </button>
+          </div>
+        </header>
+        <section id="progress"></section>
+        <section class="add-task">
+          <input
+            id="task-title"
+            data-i18n-placeholder="task.newPlaceholder"
+            placeholder="Add a new task"
+          />
+          <button id="add-task" data-i18n="common.add">Add</button>
+        </section>
+        <section id="tasks"></section>
+      </main>
+    </div>
+
+    <dialog id="user-menu-dialog" class="action-dialog">
+      <div class="action-dialog-content">
+        <h2 data-i18n="user.menu">User menu</h2>
+        <p id="user-menu-email" class="hint"></p>
+        <label class="language-field">
+          <span data-i18n="language.label">Language</span>
+          <select id="language-select">
+            <option value="de">Deutsch</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <button id="import-microsoft" class="menu-action">
+          <span>⇩</span
+          ><span
+            ><strong data-i18n="import.microsoft">Import Microsoft To Do</strong
+            ><small data-i18n="import.description"
+              >Select JSON created by the Bash export</small
+            ></span
+          >
+        </button>
+        <input
+          id="microsoft-import-file"
+          type="file"
+          accept="application/json,.json"
+          hidden
+        />
+        <button id="theme" class="menu-action">
+          <span>◐</span
+          ><span
+            ><strong data-i18n="theme.toggle">Change appearance</strong
+            ><small data-i18n="theme.description"
+              >Switch between light and dark mode</small
+            ></span
+          >
+        </button>
+        <button id="logout" class="menu-action danger-action">
+          <span>↪</span
+          ><span
+            ><strong data-i18n="auth.logout">Sign out</strong
+            ><small data-i18n="auth.logoutDescription"
+              >End the current session</small
+            ></span
+          >
+        </button>
+        <button
+          id="close-user-menu"
+          class="menu-close"
+          data-i18n="common.close"
+        >
+          Close
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="mobile-lists-dialog" class="action-dialog">
+      <div class="action-dialog-content">
+        <h2 data-i18n="list.allLists">Lists</h2>
+        <div id="mobile-list-options" class="mobile-list-options"></div>
+        <button id="mobile-new-list" class="primary" data-i18n="list.new">
+          ＋ New list
+        </button>
+        <button
+          id="close-mobile-lists"
+          class="menu-close"
+          data-i18n="common.close"
+        >
+          Close
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="list-dialog">
+      <form id="list-form">
+        <h2 data-i18n="list.new">New list</h2>
+        <label
+          ><span data-i18n="list.icon">Icon</span>
+          <select id="list-icon" required>
+            <option value="📝" data-i18n="icon.notes">📝 Notes</option>
+            <option value="🛒" data-i18n="icon.shopping">🛒 Shopping</option>
+            <option value="🏠" data-i18n="icon.home">🏠 Home</option>
+            <option value="💼" data-i18n="icon.work">💼 Work</option>
+            <option value="🎒" data-i18n="icon.packing">🎒 Packing list</option>
+            <option value="✈️" data-i18n="icon.travel">✈️ Travel</option>
+            <option value="🎁" data-i18n="icon.gifts">🎁 Gifts</option>
+            <option value="🍽️" data-i18n="icon.food">🍽️ Food</option>
+            <option value="🌱" data-i18n="icon.garden">🌱 Garden</option>
+            <option value="🔧" data-i18n="icon.repairs">🔧 Repairs</option>
+            <option value="💡" data-i18n="icon.ideas">💡 Ideas</option>
+            <option value="❤️" data-i18n="icon.personal">❤️ Personal</option>
+          </select>
+        </label>
+        <label
+          ><span data-i18n="common.name">Name</span
+          ><input
+            id="list-name"
+            data-i18n-placeholder="list.namePlaceholder"
+            placeholder="e.g. Garden"
+            required
+        /></label>
+        <div class="dialog-actions">
+          <button id="cancel-list" type="button" data-i18n="common.cancel">
+            Cancel
+          </button>
+          <button id="save-list" type="submit" data-i18n="common.create">
+            Create
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="task-dialog">
+      <form method="dialog">
+        <h2 data-i18n="task.edit">Edit task</h2>
+        <label
+          ><span data-i18n="task.title">Title</span
+          ><input id="edit-title" required
+        /></label>
+        <label
+          ><span data-i18n="task.due">Due date</span
+          ><input id="edit-date" type="date"
+        /></label>
+        <label
+          ><span data-i18n="task.repeat">Repeat</span>
+          <select id="edit-repeat">
+            <option value="" data-i18n="repeat.none">Do not repeat</option>
+            <option value="daily" data-i18n="repeat.daily">Daily</option>
+            <option value="weekly" data-i18n="repeat.weekly">Weekly</option>
+            <option value="monthly" data-i18n="repeat.monthly">Monthly</option>
+            <option value="yearly" data-i18n="repeat.yearly">Yearly</option>
+          </select>
+        </label>
+        <label
+          ><span data-i18n="task.notes">Notes</span
+          ><textarea
+            id="edit-notes"
+            rows="4"
+            data-i18n-placeholder="task.notesPlaceholder"
+            placeholder="Optional note"
+          ></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button value="cancel" data-i18n="common.cancel">Cancel</button>
+          <button id="save-task" value="default" data-i18n="common.save">
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="list-menu-dialog" class="action-dialog">
+      <div class="action-dialog-content">
+        <h2 id="list-menu-title" data-i18n="list.options">List options</h2>
+        <p id="list-menu-info" class="hint"></p>
+        <button id="menu-share" class="menu-action">
+          <span>♧</span
+          ><span
+            ><strong data-i18n="share.title">List shared with …</strong
+            ><small data-i18n="share.manage"
+              >View and manage people</small
+            ></span
+          >
+        </button>
+        <button id="menu-delete-completed" class="menu-action">
+          <span>✓</span
+          ><span
+            ><strong data-i18n="task.deleteCompleted"
+              >Delete completed tasks</strong
+            ><small id="completed-tasks-info"></small
+          ></span>
+        </button>
+        <button id="menu-delete" class="menu-action danger-action">
+          <span>⌫</span
+          ><span
+            ><strong data-i18n="list.delete">Delete list</strong
+            ><small data-i18n="list.deleteDescription"
+              >Permanently delete the list and all tasks</small
+            ></span
+          >
+        </button>
+        <button
+          id="close-list-menu"
+          class="menu-close"
+          data-i18n="common.close"
+        >
+          Close
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="share-dialog">
+      <form method="dialog">
+        <h2 data-i18n="share.title">List shared with …</h2>
+        <p class="hint" data-i18n="share.description">
+          Shared people can edit the list and its tasks.
+        </p>
+        <label id="share-email-label"
+          ><span data-i18n="common.email">Email</span
+          ><input id="share-email" type="email" placeholder="name@example.com"
+        /></label>
+        <p id="share-error" class="error"></p>
+        <div class="dialog-actions">
+          <button value="cancel" data-i18n="common.close">Close</button>
+          <button id="add-member" value="default" data-i18n="common.add">
+            Add
+          </button>
+        </div>
+      </form>
+      <div id="members" class="members"></div>
+    </dialog>
+
+    <script src="app.js?v=16"></script>
+  </body>
+</html>

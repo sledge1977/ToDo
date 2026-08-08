@@ -1,0 +1,24 @@
+# .NET build output
+bin/
+obj/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+*.suo
+*.user
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.token
+graph-token*
+
+# Microsoft To Do exports contain personal task data
+microsoft-todo-export.json
+scripts/microsoft-todo-export.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
