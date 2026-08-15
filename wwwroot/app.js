@@ -5,6 +5,9 @@ let editing = null;
 let registerMode = false;
 let currentUserEmail = "";
 let language = "en";
+let offlineChanges = JSON.parse(localStorage.todoOfflineQueue || "[]");
+let isOnline = navigator.onLine;
+let cachedLists = JSON.parse(localStorage.todoLists || "[]");
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -20,6 +23,10 @@ const translations = {
     "common.name": "Name",
     "common.password": "Password",
     "common.save": "Save",
+    "sync.online": "Online",
+    "sync.offline": "Offline mode",
+    "sync.pending": "{count} offline changes pending",
+    "sync.pending.one": "1 offline change pending",
     "auth.tagline": "Your tasks. Together, without distractions.",
     "auth.login": "Sign in",
     "auth.register": "Create account",
@@ -141,6 +148,10 @@ const translations = {
     "common.name": "Name",
     "common.password": "Passwort",
     "common.save": "Speichern",
+    "sync.online": "Online",
+    "sync.offline": "Offline arbeiten",
+    "sync.pending": "{count} Offlineänderungen ausstehend",
+    "sync.pending.one": "1 Offlineänderung ausstehend",
     "auth.tagline": "Deine Aufgaben. Gemeinsam, ohne Ablenkung.",
     "auth.login": "Anmelden",
     "auth.register": "Konto erstellen",
@@ -307,6 +318,19 @@ function updateAuthModeText() {
 
 // API errors use stable language-neutral codes. Translation happens in the browser.
 async function api(url, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET" && options.body) {
+    const body = JSON.parse(options.body);
+    body.changedAt ||= nowIso();
+    if (method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= crypto.randomUUID();
+    options = { ...options, body: JSON.stringify(body) };
+  }
+  if (!isOnline && method !== "GET") {
+    const body = options.body ? JSON.parse(options.body) : null;
+    const result = queueOfflineMutation(url, method, body);
+    render();
+    return result;
+  }
   const response = await fetch(`/api/${url}`, {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -332,6 +356,78 @@ async function api(url, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+function persistOfflineState() {
+  localStorage.todoOfflineQueue = JSON.stringify(offlineChanges);
+  localStorage.todoLists = JSON.stringify(lists);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function queueOfflineMutation(url, method, body) {
+  const changedAt = body && method !== "DELETE" ? nowIso() : undefined;
+  if (body && changedAt) body.changedAt = changedAt;
+  if (body && method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= crypto.randomUUID();
+  const mutation = { id: crypto.randomUUID(), url, method, body, changedAt: changedAt || nowIso() };
+  offlineChanges.push(mutation);
+  applyLocalMutation(mutation);
+  persistOfflineState();
+  return { queued: true };
+}
+
+function applyLocalMutation({ url, method, body }) {
+  const parts = url.split("/");
+  if (method === "POST" && url === "lists") {
+    const id = body.clientId || crypto.randomUUID();
+    lists.push({ id, name: body.name, icon: body.icon || "📝", tasks: [], isOwner: true, members: [], lastChangedAt: body.changedAt });
+    currentId = id;
+  } else if (method === "POST" && parts[0] === "lists" && parts[2] === "tasks") {
+    const list = lists.find((item) => item.id === parts[1]);
+    if (list) list.tasks.push({ id: body.clientId || crypto.randomUUID(), title: body.title, done: false, isStarred: false, dueDate: body.dueDate || null, notes: body.notes || null, repeat: body.repeat || null, parentId: body.parentId || null, lastChangedAt: body.changedAt });
+  } else if (method === "PATCH" && parts[0] === "tasks") {
+    const task = lists.flatMap((list) => list.tasks).find((item) => item.id === parts[1]);
+    if (task) Object.assign(task, body, { lastChangedAt: body.changedAt || nowIso() });
+  } else if (method === "DELETE" && parts[0] === "tasks") {
+    for (const list of lists) list.tasks = list.tasks.filter((task) => task.id !== parts[1]);
+  } else if (method === "DELETE" && parts[0] === "lists" && parts[2] === "completed-tasks") {
+    const list = lists.find((item) => item.id === parts[1]);
+    if (list) {
+      const parentIds = new Set(list.tasks.filter((task) => task.parentId).map((task) => task.parentId));
+      list.tasks = list.tasks.filter((task) => !task.done || parentIds.has(task.id));
+    }
+  } else if (method === "DELETE" && parts[0] === "lists") {
+    lists = lists.filter((list) => list.id !== parts[1]);
+    if (currentId === parts[1]) currentId = lists[0]?.id;
+  }
+}
+
+function updateSyncStatus() {
+  const status = $("#sync-status");
+  if (!status) return;
+  status.className = isOnline ? "sync-status online" : "sync-status offline";
+  const count = offlineChanges.length;
+  status.textContent = `${isOnline ? "● " + t("sync.online") : "⚡ " + t("sync.offline")} · ${t(count === 1 ? "sync.pending.one" : "sync.pending", { count })}`;
+  status.title = status.textContent;
+}
+
+async function flushOfflineMutations() {
+  if (!isOnline || !offlineChanges.length) return;
+  const pending = [...offlineChanges];
+  for (const mutation of pending) {
+    try {
+      const response = await fetch(`/api/${mutation.url}`, { method: mutation.method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: mutation.body ? JSON.stringify(mutation.body) : undefined });
+      if (!response.ok && response.status !== 404) throw new Error("sync failed");
+      offlineChanges = offlineChanges.filter((item) => item.id !== mutation.id);
+      persistOfflineState();
+      updateSyncStatus();
+    } catch {
+      break;
+    }
+  }
+  if (!offlineChanges.length) await load();
+}
+
 function showAuth() {
   $("#app-view").hidden = true;
   $("#auth-view").hidden = false;
@@ -344,6 +440,7 @@ function showApp() {
 
 function setCurrentUser(email) {
   currentUserEmail = email || "";
+  if (currentUserEmail) localStorage.todoUserEmail = currentUserEmail;
   $("#current-user").textContent = currentUserEmail || "–";
   $("#current-user").title = currentUserEmail;
   $("#user-menu-email").textContent = currentUserEmail;
@@ -361,18 +458,37 @@ async function boot() {
     showApp();
     await load();
   } catch {
-    showAuth();
+    if (!isOnline && localStorage.todoHasSession === "true") {
+      lists = cachedLists;
+      setCurrentUser(localStorage.todoUserEmail || "");
+      showApp();
+      render();
+    } else showAuth();
   }
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+  updateSyncStatus();
 }
 
 async function load() {
+  if (!isOnline) {
+    lists = cachedLists;
+    render();
+    return;
+  }
+  await flushOfflineMutations();
   lists = await api("lists");
+  localStorage.todoHasSession = "true";
+  cachedLists = lists;
+  persistOfflineState();
   if (!currentId || !lists.some((list) => list.id === currentId))
     currentId = lists[0]?.id;
   render();
 }
+
+window.addEventListener("online", async () => { isOnline = true; updateSyncStatus(); await flushOfflineMutations(); await load(); });
+window.addEventListener("offline", () => { isOnline = false; updateSyncStatus(); render(); });
+window.addEventListener("beforeunload", persistOfflineState);
 
 function current() {
   return lists.find((list) => list.id === currentId);
@@ -416,6 +532,7 @@ function normalizeRepeat(value) {
 
 // Render list navigation and task rows, then bind events to the newly created elements.
 function render() {
+  updateSyncStatus();
   const list = current();
   $("#lists").innerHTML = lists
     .map(

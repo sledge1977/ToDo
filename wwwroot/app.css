@@ -218,6 +218,17 @@ h1 {
   color: var(--muted);
   margin-bottom: 23px;
 }
+.sync-status {
+  display: inline-block;
+  margin: -12px 0 18px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sync-status.offline { background: #fff1d6; color: #9a6200; }
 .progress-line {
   height: 5px;
   background: var(--line);

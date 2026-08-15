@@ -162,9 +162,11 @@ api.MapPost(
             return Results.BadRequest(new { code = "list_name_required" });
         var list = new ToDoList
         {
+            Id = request.ClientId ?? Guid.NewGuid(),
             Name = request.Name.Trim(),
             Icon = ListIcons.Normalize(request.Icon),
             OwnerId = user.Id(),
+            LastChangedAt = request.ChangedAt ?? DateTime.UtcNow,
         };
         db.Lists.Add(list);
         await db.SaveChangesAsync();
@@ -180,10 +182,14 @@ api.MapPatch(
             return Results.NotFound();
         if (!list.CanEdit(user.Id()))
             return Results.Forbid();
-        if (!string.IsNullOrWhiteSpace(request.Name))
-            list.Name = request.Name.Trim();
-        if (request.Icon is not null)
-            list.Icon = ListIcons.Normalize(request.Icon);
+        if (request.ChangedAt is null || request.ChangedAt >= list.LastChangedAt)
+        {
+            if (!string.IsNullOrWhiteSpace(request.Name))
+                list.Name = request.Name.Trim();
+            if (request.Icon is not null)
+                list.Icon = ListIcons.Normalize(request.Icon);
+            list.LastChangedAt = request.ChangedAt ?? DateTime.UtcNow;
+        }
         await db.SaveChangesAsync();
         return Results.NoContent();
     }
@@ -294,12 +300,14 @@ api.MapPost(
         }
         var task = new ToDoTask
         {
+            Id = request.ClientId ?? Guid.NewGuid(),
             ListId = listId,
             ParentId = request.ParentId,
             Title = request.Title.Trim(),
             DueDate = request.DueDate,
             Notes = request.Notes,
             Repeat = request.Repeat,
+            LastChangedAt = request.ChangedAt ?? DateTime.UtcNow,
         };
         db.Tasks.Add(task);
         await db.SaveChangesAsync();
@@ -320,21 +328,25 @@ api.MapPatch(
             return Results.Forbid();
         if (request.Done == true && await db.Tasks.AnyAsync(x => x.ParentId == id && !x.Done))
             return Results.Conflict(new { code = "complete_subtasks_first" });
-        if (!string.IsNullOrWhiteSpace(request.Title))
-            task.Title = request.Title.Trim();
-        if (request.Done is not null)
-            task.Done = request.Done.Value;
-        if (request.Done == false && task.ParentId is not null)
+        if (request.ChangedAt is null || request.ChangedAt >= task.LastChangedAt)
         {
-            var parent = await db.Tasks.FindAsync(task.ParentId.Value);
-            if (parent is not null)
-                parent.Done = false;
+            if (!string.IsNullOrWhiteSpace(request.Title))
+                task.Title = request.Title.Trim();
+            if (request.Done is not null)
+                task.Done = request.Done.Value;
+            if (request.Done == false && task.ParentId is not null)
+            {
+                var parent = await db.Tasks.FindAsync(task.ParentId.Value);
+                if (parent is not null)
+                    parent.Done = false;
+            }
+            if (request.IsStarred is not null)
+                task.IsStarred = request.IsStarred.Value;
+            task.DueDate = request.ClearDueDate ? null : request.DueDate ?? task.DueDate;
+            task.Notes = request.Notes ?? task.Notes;
+            task.Repeat = request.Repeat ?? task.Repeat;
+            task.LastChangedAt = request.ChangedAt ?? DateTime.UtcNow;
         }
-        if (request.IsStarred is not null)
-            task.IsStarred = request.IsStarred.Value;
-        task.DueDate = request.ClearDueDate ? null : request.DueDate ?? task.DueDate;
-        task.Notes = request.Notes ?? task.Notes;
-        task.Repeat = request.Repeat ?? task.Repeat;
         await db.SaveChangesAsync();
         return Results.NoContent();
     }
@@ -391,6 +403,12 @@ static async Task InitializeDatabase(IServiceProvider services)
                 "ALTER TABLE \"Tasks\" ADD COLUMN IF NOT EXISTS \"IsStarred\" boolean NOT NULL DEFAULT FALSE"
             );
             await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"Tasks\" ADD COLUMN IF NOT EXISTS \"LastChangedAt\" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            );
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"Lists\" ADD COLUMN IF NOT EXISTS \"LastChangedAt\" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            );
+            await db.Database.ExecuteSqlRawAsync(
                 "ALTER TABLE \"Lists\" ADD COLUMN IF NOT EXISTS \"ExternalSource\" text"
             );
             await db.Database.ExecuteSqlRawAsync(
@@ -434,13 +452,13 @@ record LoginRequest(string Email, string Password);
 
 record LanguageRequest(string Language);
 
-record CreateList(string Name, string? Icon);
+record CreateList(string Name, string? Icon, Guid? ClientId, DateTime? ChangedAt);
 
-record UpdateList(string? Name, string? Icon);
+record UpdateList(string? Name, string? Icon, DateTime? ChangedAt);
 
 record ShareRequest(string Email);
 
-record CreateTask(string Title, Guid? ParentId, DateOnly? DueDate, string? Notes, string? Repeat);
+record CreateTask(string Title, Guid? ParentId, DateOnly? DueDate, string? Notes, string? Repeat, Guid? ClientId, DateTime? ChangedAt);
 
 record UpdateTask(
     string? Title,
@@ -449,7 +467,8 @@ record UpdateTask(
     DateOnly? DueDate,
     bool ClearDueDate,
     string? Notes,
-    string? Repeat
+    string? Repeat,
+    DateTime? ChangedAt
 );
 
 sealed class ApplicationUser : IdentityUser
@@ -530,6 +549,7 @@ sealed class ToDoList
     public string? ExternalId { get; set; }
     public List<ToDoTask> Tasks { get; set; } = [];
     public List<ListMember> Members { get; set; } = [];
+    public DateTime LastChangedAt { get; set; } = DateTime.UtcNow;
 
     public bool CanEdit(string userId) =>
         OwnerId == userId || Members.Any(member => member.UserId == userId);
@@ -543,7 +563,8 @@ sealed class ToDoList
             OwnerId == userId,
             Members
                 .Select(member => new MemberDto(member.UserId, member.User?.Email ?? ""))
-                .ToList()
+                .ToList(),
+            LastChangedAt
         );
 }
 
@@ -563,8 +584,9 @@ sealed class ToDoTask
     public string? ExternalSource { get; set; }
     public string? ExternalId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime LastChangedAt { get; set; } = DateTime.UtcNow;
 
-    public TaskDto ToDto() => new(Id, Title, Done, IsStarred, DueDate, Notes, Repeat, ParentId);
+    public TaskDto ToDto() => new(Id, Title, Done, IsStarred, DueDate, Notes, Repeat, ParentId, LastChangedAt);
 }
 
 sealed class ListMember
@@ -583,7 +605,8 @@ record ListDto(
     string Icon,
     List<TaskDto> Tasks,
     bool IsOwner,
-    List<MemberDto> Members
+    List<MemberDto> Members,
+    DateTime LastChangedAt
 );
 
 record TaskDto(
@@ -594,7 +617,8 @@ record TaskDto(
     DateOnly? DueDate,
     string? Notes,
     string? Repeat,
-    Guid? ParentId
+    Guid? ParentId,
+    DateTime LastChangedAt
 );
 
 record MemberDto(string Id, string Email);
