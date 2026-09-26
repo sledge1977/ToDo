@@ -25,6 +25,7 @@ const translations = {
     "common.save": "Save",
     "sync.online": "Online",
     "sync.offline": "Offline mode",
+    "sync.syncing": "Syncing …",
     "sync.pending": "{count} offline changes pending",
     "sync.pending.one": "1 offline change pending",
     "auth.tagline": "Your tasks. Together, without distractions.",
@@ -150,6 +151,7 @@ const translations = {
     "common.save": "Speichern",
     "sync.online": "Online",
     "sync.offline": "Offline arbeiten",
+    "sync.syncing": "Wird synchronisiert …",
     "sync.pending": "{count} Offlineänderungen ausstehend",
     "sync.pending.one": "1 Offlineänderung ausstehend",
     "auth.tagline": "Deine Aufgaben. Gemeinsam, ohne Ablenkung.",
@@ -331,11 +333,28 @@ async function api(url, options = {}) {
     render();
     return result;
   }
-  const response = await fetch(`/api/${url}`, {
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+
+  let response;
+  try {
+    response = await fetch(`/api/${url}`, {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    // navigator.onLine and the online/offline events are unreliable on mobile:
+    // a phone can report "online" while it has no actual route to the server
+    // (weak signal, captive portal, switching between wifi/cellular). A failed
+    // fetch is the only trustworthy offline signal, so treat it as one.
+    setOnlineState(false);
+    if (method !== "GET") {
+      const body = options.body ? JSON.parse(options.body) : null;
+      const result = queueOfflineMutation(url, method, body);
+      render();
+      return result;
+    }
+    throw new NetworkOfflineError();
+  }
 
   if (!response.ok) {
     if (response.status === 401) {
@@ -354,6 +373,14 @@ async function api(url, options = {}) {
   }
 
   return response.status === 204 ? null : response.json();
+}
+
+class NetworkOfflineError extends Error {}
+
+function setOnlineState(value) {
+  if (isOnline === value) return;
+  isOnline = value;
+  updateSyncStatus();
 }
 
 function persistOfflineState() {
@@ -402,29 +429,61 @@ function applyLocalMutation({ url, method, body }) {
   }
 }
 
+let isSyncing = false;
+
+// The pill is only shown when there is something worth reporting: while
+// offline, while actively syncing, or when changes are still queued. In the
+// steady-state (online, nothing pending) it stays out of the way.
 function updateSyncStatus() {
   const status = $("#sync-status");
   if (!status) return;
-  status.className = isOnline ? "sync-status online" : "sync-status offline";
   const count = offlineChanges.length;
-  status.textContent = `${isOnline ? "● " + t("sync.online") : "⚡ " + t("sync.offline")} · ${t(count === 1 ? "sync.pending.one" : "sync.pending", { count })}`;
+  if (isOnline && !isSyncing && count === 0) {
+    status.hidden = true;
+    status.textContent = "";
+    return;
+  }
+  status.hidden = false;
+  status.className = `sync-status ${!isOnline ? "offline" : isSyncing ? "syncing" : "online"}`;
+  const icon = !isOnline ? "⚡" : isSyncing ? "↻" : "●";
+  const label = !isOnline
+    ? t("sync.offline")
+    : isSyncing
+      ? t("sync.syncing")
+      : t("sync.online");
+  const pending = count
+    ? ` · ${t(count === 1 ? "sync.pending.one" : "sync.pending", { count })}`
+    : "";
+  status.textContent = `${icon} ${label}${pending}`;
   status.title = status.textContent;
 }
 
 async function flushOfflineMutations() {
   if (!isOnline || !offlineChanges.length) return;
+  isSyncing = true;
+  updateSyncStatus();
   const pending = [...offlineChanges];
   for (const mutation of pending) {
+    let response;
     try {
-      const response = await fetch(`/api/${mutation.url}`, { method: mutation.method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: mutation.body ? JSON.stringify(mutation.body) : undefined });
-      if (!response.ok && response.status !== 404) throw new Error("sync failed");
-      offlineChanges = offlineChanges.filter((item) => item.id !== mutation.id);
-      persistOfflineState();
-      updateSyncStatus();
+      response = await fetch(`/api/${mutation.url}`, { method: mutation.method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: mutation.body ? JSON.stringify(mutation.body) : undefined });
     } catch {
+      // Real network failure: keep this and every later mutation queued and
+      // retry the whole batch next time we're actually back online.
+      setOnlineState(false);
       break;
     }
+    // A server-rejected mutation (stale edit, already-deleted parent, …) can
+    // never succeed by retrying, so drop it instead of blocking every change
+    // queued after it forever.
+    if (!response.ok && response.status !== 404) {
+      console.warn(`Discarding offline change that the server rejected: ${mutation.method} ${mutation.url}`);
+    }
+    offlineChanges = offlineChanges.filter((item) => item.id !== mutation.id);
+    persistOfflineState();
   }
+  isSyncing = false;
+  updateSyncStatus();
   if (!offlineChanges.length) await load();
 }
 
@@ -477,7 +536,16 @@ async function load() {
     return;
   }
   await flushOfflineMutations();
-  lists = await api("lists");
+  try {
+    lists = await api("lists");
+  } catch (error) {
+    if (error instanceof NetworkOfflineError) {
+      lists = cachedLists;
+      render();
+      return;
+    }
+    throw error;
+  }
   localStorage.todoHasSession = "true";
   cachedLists = lists;
   persistOfflineState();
@@ -486,8 +554,34 @@ async function load() {
   render();
 }
 
-window.addEventListener("online", async () => { isOnline = true; updateSyncStatus(); await flushOfflineMutations(); await load(); });
-window.addEventListener("offline", () => { isOnline = false; updateSyncStatus(); render(); });
+async function goOnline() {
+  setOnlineState(true);
+  await flushOfflineMutations();
+  await load();
+}
+
+// The browser's online/offline events are the primary signal, but mobile
+// browsers (especially iOS Safari, and PWAs resumed from the background)
+// often fail to fire them on real connectivity changes. Re-checking whenever
+// the app becomes visible again, plus a periodic fallback, catches those cases.
+async function recheckConnectivity() {
+  if (isOnline) return;
+  try {
+    const response = await fetch("/api/auth/me", { credentials: "same-origin", cache: "no-store" });
+    if (response.ok || response.status === 401) await goOnline();
+  } catch {
+    // Still offline.
+  }
+}
+
+window.addEventListener("online", goOnline);
+window.addEventListener("offline", () => { setOnlineState(false); render(); });
+window.addEventListener("focus", recheckConnectivity);
+window.addEventListener("pageshow", recheckConnectivity);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") recheckConnectivity();
+});
+setInterval(recheckConnectivity, 20000);
 window.addEventListener("beforeunload", persistOfflineState);
 
 function current() {
@@ -648,14 +742,19 @@ function bindTaskActions() {
 
   document.querySelectorAll(".star").forEach((button) => {
     button.onclick = async () => {
-      await api(`tasks/${button.dataset.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          isStarred: button.dataset.starred !== "true",
-          clearDueDate: false,
-        }),
-      });
-      await load();
+      try {
+        await api(`tasks/${button.dataset.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            isStarred: button.dataset.starred !== "true",
+            clearDueDate: false,
+          }),
+        });
+        await load();
+      } catch (error) {
+        await load();
+        alert(error.message);
+      }
     };
   });
 
@@ -667,14 +766,19 @@ function bindTaskActions() {
     button.onclick = async () => {
       const title = prompt(t("task.subtaskPrompt"));
       if (!title?.trim()) return;
-      await api(`lists/${currentId}/tasks`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: title.trim(),
-          parentId: button.dataset.id,
-        }),
-      });
-      await load();
+      try {
+        await api(`lists/${currentId}/tasks`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: title.trim(),
+            parentId: button.dataset.id,
+          }),
+        });
+        await load();
+      } catch (error) {
+        await load();
+        alert(error.message);
+      }
     };
   });
 
