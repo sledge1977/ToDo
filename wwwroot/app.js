@@ -386,6 +386,13 @@ function setOnlineState(value) {
 function persistOfflineState() {
   localStorage.todoOfflineQueue = JSON.stringify(offlineChanges);
   localStorage.todoLists = JSON.stringify(lists);
+  // load() falls back to cachedLists while offline, so it must reflect
+  // locally-applied offline mutations immediately, not just localStorage
+  // (which only takes effect on the next page load). Without this, marking
+  // a task done or adding one while offline was instantly reverted by the
+  // load() call right after, since cachedLists still held the pre-mutation
+  // snapshot from boot.
+  cachedLists = lists;
 }
 
 function nowIso() {

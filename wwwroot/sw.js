@@ -1,8 +1,8 @@
-const cacheName = "todo-v18";
+const cacheName = "todo-v19";
 const appShell = [
   "/",
-  "/app.css?v=18",
-  "/app.js?v=18",
+  "/app.css?v=19",
+  "/app.js?v=19",
   "/manifest.webmanifest",
   "/icon.svg",
 ];
