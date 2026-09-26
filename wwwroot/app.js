@@ -324,7 +324,7 @@ async function api(url, options = {}) {
   if (method !== "GET" && options.body) {
     const body = JSON.parse(options.body);
     body.changedAt ||= nowIso();
-    if (method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= crypto.randomUUID();
+    if (method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= generateId();
     options = { ...options, body: JSON.stringify(body) };
   }
   if (!isOnline && method !== "GET") {
@@ -399,11 +399,26 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// crypto.randomUUID() only exists in secure contexts (HTTPS, or localhost).
+// This app is also reachable over plain HTTP on a LAN address, where it is
+// undefined and throws — which silently aborted every offline mutation
+// (they all generate a client-side id). crypto.getRandomValues() has no such
+// restriction, so build a UUID v4 from it instead, keeping randomUUID as the
+// preferred path when it is actually available.
+function generateId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+}
+
 function queueOfflineMutation(url, method, body) {
   const changedAt = body && method !== "DELETE" ? nowIso() : undefined;
   if (body && changedAt) body.changedAt = changedAt;
-  if (body && method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= crypto.randomUUID();
-  const mutation = { id: crypto.randomUUID(), url, method, body, changedAt: changedAt || nowIso() };
+  if (body && method === "POST" && (url === "lists" || url.endsWith("/tasks"))) body.clientId ||= generateId();
+  const mutation = { id: generateId(), url, method, body, changedAt: changedAt || nowIso() };
   offlineChanges.push(mutation);
   applyLocalMutation(mutation);
   persistOfflineState();
@@ -413,12 +428,12 @@ function queueOfflineMutation(url, method, body) {
 function applyLocalMutation({ url, method, body }) {
   const parts = url.split("/");
   if (method === "POST" && url === "lists") {
-    const id = body.clientId || crypto.randomUUID();
+    const id = body.clientId || generateId();
     lists.push({ id, name: body.name, icon: body.icon || "📝", tasks: [], isOwner: true, members: [], lastChangedAt: body.changedAt });
     currentId = id;
   } else if (method === "POST" && parts[0] === "lists" && parts[2] === "tasks") {
     const list = lists.find((item) => item.id === parts[1]);
-    if (list) list.tasks.push({ id: body.clientId || crypto.randomUUID(), title: body.title, done: false, isStarred: false, dueDate: body.dueDate || null, notes: body.notes || null, repeat: body.repeat || null, parentId: body.parentId || null, lastChangedAt: body.changedAt });
+    if (list) list.tasks.push({ id: body.clientId || generateId(), title: body.title, done: false, isStarred: false, dueDate: body.dueDate || null, notes: body.notes || null, repeat: body.repeat || null, parentId: body.parentId || null, lastChangedAt: body.changedAt });
   } else if (method === "PATCH" && parts[0] === "tasks") {
     const task = lists.flatMap((list) => list.tasks).find((item) => item.id === parts[1]);
     if (task) Object.assign(task, body, { lastChangedAt: body.changedAt || nowIso() });
